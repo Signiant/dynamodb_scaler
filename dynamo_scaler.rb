@@ -6,6 +6,7 @@ require 'rubygems'
 require 'bundler/setup'
 
 require 'aws-sdk-v1'
+require 'json'
 
 CODE_OK = 0
 CODE_WARNING = 1
@@ -226,7 +227,7 @@ def read_config(config_file)
                 config = YAML.load_file(config_file)
         rescue Exception => e
             myPuts "Caught Exception #{e} reading config"
-            return NAGIOS_CODE_UNKNOWN, "Caught Exception #{e} reading config"
+            return CODE_UNKNOWN, "Caught Exception #{e} reading config"
         end
         if config.include?("dynamodb")
 		config["dynamodb"].each_key do |table_name|
@@ -252,7 +253,7 @@ def read_config(config_file)
                         end
                 end
         end
-        return NAGIOS_CODE_OK, "reading config complete"
+        return CODE_OK, "reading config complete"
 end
 
 
@@ -263,7 +264,7 @@ def read_ignore(ignore_file)
                 ignore = YAML.load_file(ignore_file)
         rescue Exception => e
             myPuts "Caught Exception #{e} reading ignore"
-            return NAGIOS_CODE_UNKNOWN, "Caught Exception #{e} reading ignore"
+            return CODE_UNKNOWN, "Caught Exception #{e} reading ignore"
         end
         if ignore.include?("endtime")
 	    myPuts "ignore endtime #{ignore['endtime']}"
@@ -282,7 +283,7 @@ def read_ignore(ignore_file)
 	    end
         end
 
-        return NAGIOS_CODE_OK, "reading ignore complete"
+        return CODE_OK, "reading ignore complete"
 end
 
 
@@ -579,10 +580,11 @@ def display_menu
     puts "  --list_regions, -l:                         List the amazon region endpoints"
     puts "  --log_output <id>, -p <id>:                 Log output to with id/timestamp in dir #{@log_dir}"
     puts "  --credential_file <file>, -f <file>:        Path to a File containing the Amazon Credentials"
+	puts "  --overrides_file <file> , -n <file>:        Json format file to specify cmd line options"
     puts "  --config_file <file> , -c <file>:           yaml configuration file of tables to query "
     puts "  --ignore_file <file> , -i <file>:           yaml configuration file of tables to ignore "
     puts "  --table <table_name>, -t <table_name>:      Table to query"
-    puts "  --region <aws region>, -r <aws region>:     Amazon region (endpoint) default:#{@dynamo_db_endpoint}"
+    puts "  --region <aws region>, -r <aws region>:     Amazon region.  Default:#{@dynamo_db_endpoint}"
     puts "  "
     puts "  Note: --config_file or --table must be specified"
 
@@ -598,6 +600,16 @@ def display_regions
         exit
 end
 
+#####################################################
+def validate_region( regionIn, dynamo_regions)
+	isValidRegion = false
+	dynamo_regions.each do |key, name|
+		if regionIn == name
+			isValidRegion = true
+		end
+	end
+    return isValidRegion
+end
 
 #####################################################
 ##### main
@@ -613,12 +625,12 @@ opts.set_options(
         [ "--list_regions", "-l", GetoptLong::NO_ARGUMENT ], \
         [ "--log_output", "-p", GetoptLong::REQUIRED_ARGUMENT ], \
         [ "--table", "-t", GetoptLong::REQUIRED_ARGUMENT ], \
-	[ "--config_file", "-c", GetoptLong::REQUIRED_ARGUMENT ], \
-	[ "--ignore_file", "-i", GetoptLong::REQUIRED_ARGUMENT ], \
-	[ "--output_file", "-o", GetoptLong::REQUIRED_ARGUMENT ], \
+		[ "--overrides_file", "-n", GetoptLong::REQUIRED_ARGUMENT ], \
+		[ "--config_file", "-c", GetoptLong::REQUIRED_ARGUMENT ], \
+		[ "--ignore_file", "-i", GetoptLong::REQUIRED_ARGUMENT ], \
+		[ "--output_file", "-o", GetoptLong::REQUIRED_ARGUMENT ], \
         [ "--credential_file", "-f", GetoptLong::REQUIRED_ARGUMENT ], \
         [ "--region", "-r", GetoptLong::REQUIRED_ARGUMENT ]
-
       )
 
 @cmdline_table = nil
@@ -649,21 +661,16 @@ begin
               @output_file = arg
 	    when '--table'
 		@cmdline_table = arg
-            when '--region'
-                isValidRegion = false
-                @dynamo_regions.each do |key, name|
-                    if arg == name
-                        isValidRegion = true
-                        @dynamo_db_endpoint = arg
-                    end
-                end
-                if isValidRegion == false
-                        myPuts "Error: not valid region, must be one of following"
-                        display_endpoints
-                end
-
+        when '--region'
+			if validate_region( arg,@dynamo_regions)
+			    @dynamo_db_endpoint = arg
+			else
+			    puts "Error: Invalid region specified on the command line. Region must be one of..."
+				display_regions
+			end
 	  end
 	}
+	
 rescue => err
         #puts "#{err.class()}: #{err.message}"
         display_menu
@@ -728,7 +735,7 @@ begin
   end
 rescue Exception => e
   myPuts "Error occured while retrieving and decrypting credentials: #{e}",true
-  exit NAGIOS_CODE_CRITICAL
+  exit CODE_CRITICAL
 end
 
 
@@ -745,7 +752,7 @@ begin
 
 rescue Exception => e
   myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
-  exit NAGIOS_CODE_CRITICAL
+  exit CODE_CRITICAL
 end
 
 @cwApi = nil
@@ -753,7 +760,7 @@ begin
   @cwApi = AWS::CloudWatch.new( :access_key_id => access_key_id, :secret_access_key => secret_access_key)
 rescue Exception => e
   myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
-  exit NAGIOS_CODE_CRITICAL
+  exit CODE_CRITICAL
 end
 
 #if @verbose == true
@@ -782,7 +789,7 @@ while @is_truncated == true
 	rescue Exception => e
 		myPuts "Error unable to start process with Amazon; aborting process",true
 		myPuts "Error List Tables:#{e}",true
-		exit! NAGIOS_CODE_CRITICAL
+		exit! CODE_CRITICAL
 	end
 	#pp tables if @verbose == true
 	@dynamodb_tables.each do | table_name, table|

@@ -29,11 +29,12 @@ STATE_ERROR = "ERROR"
 @service_output = "OK"
 @service_perfdata = ""
 @service_table_list = ""
-@rc = CODE_OK;
+@rc = CODE_OK
 
 @log_dir =  '/var/log'
 
 @dynamo_db_endpoint = 'dynamodb.us-east-1.amazonaws.com'
+@frequency = 300
 
 @dynamo_regions = {};
 @dynamo_regions["US East (Northern Virginia)"] =  "dynamodb.us-east-1.amazonaws.com"
@@ -192,13 +193,13 @@ end
 
 
 #####################################################
-def myPuts(line, forcePrint = false)
+def myPuts(line, forcePrint = false, writeFile = false)
 	if forcePrint == true
 		puts line
 	else
 		puts line if @verbose == true
 	end
-	myLogger(line)
+	myLogger(line) if writeFile == true
 end
 
 
@@ -226,7 +227,7 @@ def read_config(config_file)
         begin
                 config = YAML.load_file(config_file)
         rescue Exception => e
-            myPuts "Caught Exception #{e} reading config"
+            # myPuts "Caught Exception #{e} reading config"
             return CODE_UNKNOWN, "Caught Exception #{e} reading config"
         end
         if config.include?("dynamodb")
@@ -285,7 +286,6 @@ def read_ignore(ignore_file)
 
         return CODE_OK, "reading ignore complete"
 end
-
 
 #####################################################
 def compareCurrentToDesiredUnits( table)
@@ -403,9 +403,6 @@ def getCurrentUnits(dynamoApiClient, table_name,table)
 	return state, aws_status
 end
 
-
-
-
 #####################################################
 def get_data_points(cwApi, aws_namespace, tableName, metric, since, period, dimensionType, globalIndexName)
 	
@@ -439,7 +436,6 @@ def get_data_points(cwApi, aws_namespace, tableName, metric, since, period, dime
 	end
 	return ret_code,data_points
 end
-
 
 
 #####################################################
@@ -585,6 +581,7 @@ def display_menu
     puts "  --ignore_file <file> , -i <file>:           yaml configuration file of tables to ignore "
     puts "  --table <table_name>, -t <table_name>:      Table to query"
     puts "  --region <aws region>, -r <aws region>:     Amazon region.  Default:#{@dynamo_db_endpoint}"
+	puts "  --frequency <seconds>, -q <seconds>:        Check the table throughputs every N seconds"
     puts "  "
     puts "  Note: --config_file or --table must be specified"
 
@@ -630,6 +627,7 @@ opts.set_options(
 		[ "--ignore_file", "-i", GetoptLong::REQUIRED_ARGUMENT ], \
 		[ "--output_file", "-o", GetoptLong::REQUIRED_ARGUMENT ], \
         [ "--credential_file", "-f", GetoptLong::REQUIRED_ARGUMENT ], \
+		[ "--frequency", "-q", GetoptLong::REQUIRED_ARGUMENT ], \
         [ "--region", "-r", GetoptLong::REQUIRED_ARGUMENT ]
       )
 
@@ -639,35 +637,52 @@ opts.set_options(
 begin
 	opts.each { |opt, arg|
 	  case opt
+	    when '--overrides_file'
+		  # read the json file
+		  jsonFile = File.read(arg)
+		  overrides_hash = JSON.parse(jsonFile)
+		  @verbose = overrides_hash['verbose']
+		  @frequency = overrides_hash['frequency']
+		  @credential_file = overrides_hash['credentialFile']
+		  @config_file = overrides_hash['configFile']
+		  @ignore_file = overrides_hash['ignoreFile']
+		  if validate_region( overrides_hash['region'],@dynamo_regions)
+		      @dynamo_db_endpoint = overrides_hash['region']
+		  else
+		      puts "Error: Invalid region specified in the config file. Region must be one of..."
+			  display_regions
+		  end
 	    when '--help'
 	      display_menu
 	    when '--test'
-		@test_mode = true
+		  @test_mode = true
 	    when '--verbose'
 	      @verbose = true
+		when '--frequency'
+		  @frequency = arg
 	    when '--log_output'
-		@log_output = true
-		@log_output_id = arg
-		@log_file_name = "dynamo_cloudwatch_#{@log_output_id}_" + @start_time.strftime("%Y-%m-%d") + ".log"
-            when '--list_regions'
-              display_regions
+		  @log_output = true
+		  @log_output_id = arg
+		  @log_file_name = "dynamo_cloudwatch_#{@log_output_id}_" + @start_time.strftime("%Y-%m-%d") + ".log"
+        when '--list_regions'
+          display_regions
 	    when '--credential_file'
 	      @credential_file = arg
 	    when '--config_file'
-              @config_file = arg
+          @config_file = arg
 	    when '--ignore_file'
-              @ignore_file = arg
+          @ignore_file = arg
 	    when '--output_file'
-              @output_file = arg
+          @output_file = arg
 	    when '--table'
-		@cmdline_table = arg
+		  @cmdline_table = arg
         when '--region'
-			if validate_region( arg,@dynamo_regions)
-			    @dynamo_db_endpoint = arg
-			else
-			    puts "Error: Invalid region specified on the command line. Region must be one of..."
-				display_regions
-			end
+		  if validate_region( arg,@dynamo_regions)
+	        @dynamo_db_endpoint = arg
+		  else
+		    puts "Error: Invalid region specified on the command line. Region must be one of..."
+			display_regions
+		  end
 	  end
 	}
 	
@@ -684,16 +699,21 @@ if @cmdline_table != nil
 	@dynamodb_tables[@cmdline_table]  = Dynamodb_table.new(@cmdline_table)
 end
 
-
 @st_measurement = Time.now()
 
 if @config_file != nil
-	@return_code,@service_output =  read_config(@config_file)
-	if @return_code != 0
-		myPuts "Error reading config #{@config_file}, msg #{@service_output}"
-		myPuts "#{@service_output}|#{@service_perfdata}",true
-		exit @return_code
-	end
+    config_read = false
+    while config_read == false do
+	    @return_code,@service_output =  read_config(@config_file)
+	    if @return_code != 0
+		    myPuts "Error reading config - does the config file exist yet? #{@config_file}, msg #{@service_output}"
+		    #myPuts "#{@service_output}|#{@service_perfdata}",true
+			sleep 10
+		    # exit @return_code
+		else
+		    config_read = true
+	    end
+	end 
 end
 
 if @ignore_file != nil
@@ -712,7 +732,7 @@ end
 
 begin
   content = File.read(@credential_file)
-  key_file = "/etc/cloutomate/cloutomate.pem" #TODO: make configurable?
+  key_file = "./cloutomate.pem" #TODO: make configurable?
   encrypted_access_key_id = content.match(/^\sec2_access_id.*ec2_access_key/m).to_s.gsub("ec2_access_id","").gsub("ec2_access_key","").strip
   encrypted_secret_access_key = content.match(/^\sec2_access_key.*/m).to_s.gsub("ec2_access_key","").strip
   if use_rsa
@@ -738,303 +758,307 @@ rescue Exception => e
   exit CODE_CRITICAL
 end
 
+# DJN loop here
+while true do
 
-
-# connect to Amazon
-begin
-  AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
-			    :access_key_id => access_key_id, 
-			    :secret_access_key => secret_access_key,
-			    :dynamo_db_endpoint => @dynamo_db_endpoint)
-  @dynamoApiClient = AWS::DynamoDB::Client.new
-
-
-
-rescue Exception => e
-  myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
-  exit CODE_CRITICAL
-end
-
-@cwApi = nil
-begin
-  @cwApi = AWS::CloudWatch.new( :access_key_id => access_key_id, :secret_access_key => secret_access_key)
-rescue Exception => e
-  myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
-  exit CODE_CRITICAL
-end
-
-#if @verbose == true
-#	metrics = @cwApi.client.list_metrics( options = {
-#		:namespace => DYNAMODB_NAMESPACE,
-#		:dimensions => [ :name=>"TableName", :value=>"#{tableName}"] 
-#	} )
-#	pp metrics
-#end
-
-
-#########
-### load up the tables that need to be changed
-#########
-
-@is_truncated = true
-@exclusive_start_table_name = nil
-while @is_truncated == true
-
-	begin
-		if @exclusive_start_table_name.nil?
-			tables = @dynamoApiClient.list_tables()
-		else 
-			tables = @dynamoApiClient.list_tables( options={:exclusive_start_table_name=>@exclusive_start_table_name})
-		end
-	rescue Exception => e
-		myPuts "Error unable to start process with Amazon; aborting process",true
-		myPuts "Error List Tables:#{e}",true
-		exit! CODE_CRITICAL
-	end
-	#pp tables if @verbose == true
-	@dynamodb_tables.each do | table_name, table|
-		if tables[:table_names].include?(table_name)
-			table.state = STATE_OK
-			state, aws_status  = getCurrentUnits(@dynamoApiClient, table_name, table)
-			table.state = state
-			if state == STATE_OK
-				table.aws_status = aws_status
-				table.capacity.originalReadUnits = table.capacity.currentReadUnits
-				table.capacity.originalWriteUnits = table.capacity.currentWriteUnits
-
-				table.capacity.currentCloudWatchReadUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedReadCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,nil)
-				table.capacity.currentCloudWatchWriteUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedWriteCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,nil)
-
-
-				table.globalIndexes.each do | index |
-				    index.capacity.originalReadUnits = index.capacity.currentReadUnits
-				    index.capacity.originalWriteUnits = index.capacity.currentWriteUnits
-				    index.capacity.currentCloudWatchReadUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedReadCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,index.name)
-				    index.capacity.currentCloudWatchWriteUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedWriteCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,index.name)
-				end
+	# connect to Amazon
+	d = DateTime.now
+	myPuts "Process starts at #{d}"
+	myPuts "connecting to AWS dynamoDB region #{@dynamo_db_endpoint}"
 	
+	begin
+	  AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
+					:access_key_id => access_key_id, 
+					:secret_access_key => secret_access_key,
+					:dynamo_db_endpoint => @dynamo_db_endpoint)
+	  @dynamoApiClient = AWS::DynamoDB::Client.new
 
-				if @verbose == true
-					table.throttledRequestsScan = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ThrottledRequests", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Scan",nil)
-					table.systemErrorsScan = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "SystemErrors", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Scan",nil)
+	rescue Exception => e
+	  myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
+	  exit CODE_CRITICAL
+	end
 
-					table.throttledRequestsQuery = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ThrottledRequests", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Query",nil)
-					table.systemErrorsQuery = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "SystemErrors", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Query",nil)
+	@cwApi = nil
+	begin
+	  @cwApi = AWS::CloudWatch.new( :access_key_id => access_key_id, :secret_access_key => secret_access_key)
+	rescue Exception => e
+	  myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
+	  exit CODE_CRITICAL
+	end
 
-					table.throttledRequestsUpdateItem = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ThrottledRequests", @cloudwatch_timer, CLOUDWATCH_PERIOD,"UpdateItem",nil)
-					table.systemErrorsUpdateItem = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "SystemErrors", @cloudwatch_timer, CLOUDWATCH_PERIOD,"UpdateItem",nil)
+	#if @verbose == true
+	#	metrics = @cwApi.client.list_metrics( options = {
+	#		:namespace => DYNAMODB_NAMESPACE,
+	#		:dimensions => [ :name=>"TableName", :value=>"#{tableName}"] 
+	#	} )
+	#	pp metrics
+	#end
+
+
+	#########
+	### load up the tables that need to be changed
+	#########
+
+	@is_truncated = true
+	@exclusive_start_table_name = nil
+	while @is_truncated == true
+
+		begin
+			if @exclusive_start_table_name.nil?
+				tables = @dynamoApiClient.list_tables()
+			else 
+				tables = @dynamoApiClient.list_tables( options={:exclusive_start_table_name=>@exclusive_start_table_name})
+			end
+		rescue Exception => e
+			myPuts "Error unable to start process with Amazon; aborting process",true
+			myPuts "Error List Tables:#{e}",true
+			exit! CODE_CRITICAL
+		end
+		#pp tables if @verbose == true
+		@dynamodb_tables.each do | table_name, table|
+			if tables[:table_names].include?(table_name)
+				table.state = STATE_OK
+				state, aws_status  = getCurrentUnits(@dynamoApiClient, table_name, table)
+				table.state = state
+				if state == STATE_OK
+					table.aws_status = aws_status
+					table.capacity.originalReadUnits = table.capacity.currentReadUnits
+					table.capacity.originalWriteUnits = table.capacity.currentWriteUnits
+
+					table.capacity.currentCloudWatchReadUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedReadCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,nil)
+					table.capacity.currentCloudWatchWriteUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedWriteCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,nil)
+
+					table.globalIndexes.each do | index |
+						index.capacity.originalReadUnits = index.capacity.currentReadUnits
+						index.capacity.originalWriteUnits = index.capacity.currentWriteUnits
+						index.capacity.currentCloudWatchReadUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedReadCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,index.name)
+						index.capacity.currentCloudWatchWriteUnits = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ConsumedWriteCapacityUnits", @cloudwatch_timer, CLOUDWATCH_PERIOD,nil,index.name)
+					end
+
+					if @verbose == true
+						table.throttledRequestsScan = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ThrottledRequests", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Scan",nil)
+						table.systemErrorsScan = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "SystemErrors", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Scan",nil)
+
+						table.throttledRequestsQuery = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ThrottledRequests", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Query",nil)
+						table.systemErrorsQuery = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "SystemErrors", @cloudwatch_timer, CLOUDWATCH_PERIOD,"Query",nil)
+
+						table.throttledRequestsUpdateItem = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "ThrottledRequests", @cloudwatch_timer, CLOUDWATCH_PERIOD,"UpdateItem",nil)
+						table.systemErrorsUpdateItem = get_max_data_point_per_second(@cwApi, DYNAMODB_NAMESPACE, table_name, "SystemErrors", @cloudwatch_timer, CLOUDWATCH_PERIOD,"UpdateItem",nil)
+					end
 				end
 			end
 		end
-	end
-	if tables.include?(:last_evaluated_table_name)
-		myPuts "-----------------------------------" if @verbose == true
-		@exclusive_start_table_name = tables[:last_evaluated_table_name]
-	else
-		@is_truncated = false
-	end
-end
-
-pp @dynamodb_tables if @verbose == true
-
-
-#myPuts Time.now.strftime("%Y-%m-%d-%H:%M:%S") 
-@dynamodb_tables.each do |table_name, table|
-	myPuts "#{table_name} #{table.aws_status}",@std_out_print
-	if table.state == STATE_OK
-		myPuts "     readUnit #{table.capacity.currentCloudWatchReadUnits} of #{table.capacity.currentReadUnits}",@std_out_print
-		myPuts "     writeUnit #{table.capacity.currentCloudWatchWriteUnits} of #{table.capacity.currentWriteUnits}",@std_out_print
-		table.globalIndexes.each do | index |
-		    myPuts "     globalSecIndex #{index.name} readUnit #{index.capacity.currentCloudWatchReadUnits} of #{index.capacity.currentReadUnits}",@std_out_print
-		    myPuts "     globalSecIndex #{index.name} writeUnit #{index.capacity.currentCloudWatchWriteUnits} of #{index.capacity.currentWriteUnits}",@std_out_print
+		if tables.include?(:last_evaluated_table_name)
+			myPuts "-----------------------------------" if @verbose == true
+			@exclusive_start_table_name = tables[:last_evaluated_table_name]
+		else
+			@is_truncated = false
 		end
-		if @verbose == true
-			myPuts "     Scan: throttled #{table.throttledRequestsScan} systemErrors #{table.systemErrorsScan}",@std_out_print
-			myPuts "     Query: throttled #{table.throttledRequestsQuery} systemErrors #{table.systemErrorsQuery}",@std_out_print
-			myPuts "     UpdateItem: throttled #{table.throttledRequestsUpdateItem} systemErrors #{table.systemErrorsUpdateItem}",@std_out_print
-		end
-		if table.aws_status == DYNAMODB_STATUS_ACTIVE 
-			if (table.capacity.currentCloudWatchReadUnits / table.capacity.currentReadUnits.to_f) > @threshold_over
-				myPuts " increase #{table_name} readUnits #{table.capacity.currentCloudWatchReadUnits} of #{table.capacity.currentReadUnits}"
+	end
 
-				increaseBy = (table.capacity.currentReadUnits * (table.capacity.increaseReadUnitsByPercentage/100.0)).round
-				table.capacity.desiredReadUnits = table.capacity.currentReadUnits + increaseBy
+	pp @dynamodb_tables if @verbose == true
 
-				##### table.capacity.desiredReadUnits = Integer(table.capacity.currentReadUnits * @default_threshold_increase)
-				@dynamodb_tables_to_update[table_name] = table
-				
-			end
-			if (table.capacity.currentCloudWatchWriteUnits / table.capacity.currentWriteUnits.to_f) > @threshold_over
-				myPuts " increase #{table_name} writeUnits #{table.capacity.currentCloudWatchWriteUnits} of #{table.capacity.currentWriteUnits}"
-
-				increaseBy = (table.capacity.currentWriteUnits * (table.capacity.increaseWriteUnitsByPercentage/100.0)).round
-				table.capacity.desiredWriteUnits = table.capacity.currentWriteUnits + increaseBy
-
-				##### table.capacity.desiredWriteUnits = Integer(table.capacity.currentWriteUnits * @default_threshold_increase)
-				@dynamodb_tables_to_update[table_name] = table
-			end
+	#myPuts Time.now.strftime("%Y-%m-%d-%H:%M:%S") 
+	@dynamodb_tables.each do |table_name, table|
+		myPuts "#{table_name} #{table.aws_status}",@std_out_print
+		if table.state == STATE_OK
+			myPuts "     readUnit #{table.capacity.currentCloudWatchReadUnits} of #{table.capacity.currentReadUnits}",@std_out_print
+			myPuts "     writeUnit #{table.capacity.currentCloudWatchWriteUnits} of #{table.capacity.currentWriteUnits}",@std_out_print
 			table.globalIndexes.each do | index |
-			    if index.index_status == DYNAMODB_STATUS_ACTIVE 
-				if (index.capacity.currentCloudWatchReadUnits / index.capacity.currentReadUnits.to_f) > @threshold_over
-					myPuts " increase #{table_name} globalSecIndex #{index.name} readUnits #{index.capacity.currentCloudWatchReadUnits} of #{index.capacity.currentReadUnits}"
+				myPuts "     globalSecIndex #{index.name} readUnit #{index.capacity.currentCloudWatchReadUnits} of #{index.capacity.currentReadUnits}",@std_out_print
+				myPuts "     globalSecIndex #{index.name} writeUnit #{index.capacity.currentCloudWatchWriteUnits} of #{index.capacity.currentWriteUnits}",@std_out_print
+			end
+			if @verbose == true
+				myPuts "     Scan: throttled #{table.throttledRequestsScan} systemErrors #{table.systemErrorsScan}",@std_out_print
+				myPuts "     Query: throttled #{table.throttledRequestsQuery} systemErrors #{table.systemErrorsQuery}",@std_out_print
+				myPuts "     UpdateItem: throttled #{table.throttledRequestsUpdateItem} systemErrors #{table.systemErrorsUpdateItem}",@std_out_print
+			end
+			if table.aws_status == DYNAMODB_STATUS_ACTIVE 
+				if (table.capacity.currentCloudWatchReadUnits / table.capacity.currentReadUnits.to_f) > @threshold_over
+					myPuts " increase #{table_name} readUnits #{table.capacity.currentCloudWatchReadUnits} of #{table.capacity.currentReadUnits}"
 
-					increaseBy = (index.capacity.currentReadUnits * (index.capacity.increaseReadUnitsByPercentage/100.0)).round
-					index.capacity.desiredReadUnits = index.capacity.currentReadUnits + increaseBy
+					increaseBy = (table.capacity.currentReadUnits * (table.capacity.increaseReadUnitsByPercentage/100.0)).round
+					table.capacity.desiredReadUnits = table.capacity.currentReadUnits + increaseBy
 
+					##### table.capacity.desiredReadUnits = Integer(table.capacity.currentReadUnits * @default_threshold_increase)
 					@dynamodb_tables_to_update[table_name] = table
 					
 				end
-				if (index.capacity.currentCloudWatchWriteUnits / index.capacity.currentWriteUnits.to_f) > @threshold_over
-					myPuts " increase #{table_name} globalSecIndex #{index.name} writeUnits #{index.capacity.currentCloudWatchWriteUnits} of #{index.capacity.currentWriteUnits}"
+				if (table.capacity.currentCloudWatchWriteUnits / table.capacity.currentWriteUnits.to_f) > @threshold_over
+					myPuts " increase #{table_name} writeUnits #{table.capacity.currentCloudWatchWriteUnits} of #{table.capacity.currentWriteUnits}"
 
-					increaseBy = (index.capacity.currentWriteUnits * (index.capacity.increaseWriteUnitsByPercentage/100.0)).round
-					index.capacity.desiredWriteUnits = index.capacity.currentWriteUnits + increaseBy
+					increaseBy = (table.capacity.currentWriteUnits * (table.capacity.increaseWriteUnitsByPercentage/100.0)).round
+					table.capacity.desiredWriteUnits = table.capacity.currentWriteUnits + increaseBy
 
+					##### table.capacity.desiredWriteUnits = Integer(table.capacity.currentWriteUnits * @default_threshold_increase)
 					@dynamodb_tables_to_update[table_name] = table
 				end
-			    end
+				table.globalIndexes.each do | index |
+					if index.index_status == DYNAMODB_STATUS_ACTIVE 
+					if (index.capacity.currentCloudWatchReadUnits / index.capacity.currentReadUnits.to_f) > @threshold_over
+						myPuts " increase #{table_name} globalSecIndex #{index.name} readUnits #{index.capacity.currentCloudWatchReadUnits} of #{index.capacity.currentReadUnits}"
+
+						increaseBy = (index.capacity.currentReadUnits * (index.capacity.increaseReadUnitsByPercentage/100.0)).round
+						index.capacity.desiredReadUnits = index.capacity.currentReadUnits + increaseBy
+
+						@dynamodb_tables_to_update[table_name] = table
+						
+					end
+					if (index.capacity.currentCloudWatchWriteUnits / index.capacity.currentWriteUnits.to_f) > @threshold_over
+						myPuts " increase #{table_name} globalSecIndex #{index.name} writeUnits #{index.capacity.currentCloudWatchWriteUnits} of #{index.capacity.currentWriteUnits}"
+
+						increaseBy = (index.capacity.currentWriteUnits * (index.capacity.increaseWriteUnitsByPercentage/100.0)).round
+						index.capacity.desiredWriteUnits = index.capacity.currentWriteUnits + increaseBy
+
+						@dynamodb_tables_to_update[table_name] = table
+					end
+					end
+				end
+			else
+				myPuts "     Warning: Table is not active so will not evaluate for increase"
 			end
 		else
-			myPuts "     Warning: Table is not active so will not evaluate for increase"
+			myPuts "     Warning: Table not found in dynamodb"
 		end
+	end
+
+	#### 
+	#### state which tables will be updated
+	####
+	if @dynamodb_tables_to_update.length > 0
+		@service_perfdata = "Tables: "
+		@service_output = "Tables updated: "
+		@rc = CODE_WARNING
 	else
-		myPuts "     Warning: Table not found in dynamodb"
+		@service_perfdata = ""
+		@service_output = "OK"
+		@rc = CODE_OK
 	end
-end
 
-#### 
-#### state which tables will be updated
-####
-if @dynamodb_tables_to_update.length > 0
-	@service_perfdata = "Tables: "
-	@service_output = "Tables updated: "
-	@rc = CODE_WARNING
-else
-	@service_perfdata = ""
-	@service_output = "OK"
-	@rc = CODE_OK
-end
-
-#### 
-#### validate the data for update
-####
-@dynamodb_tables_to_update.each do |table_name, table_to_update|
-	if table_to_update.capacity.desiredReadUnits == nil
-		table_to_update.capacity.desiredReadUnits = table_to_update.capacity.currentReadUnits
-	else
-		myPuts " change #{table_name} readUnits #{table_to_update.capacity.currentReadUnits} to #{table_to_update.capacity.desiredReadUnits}"
+	#### 
+	#### validate the data for update
+	####
+	@dynamodb_tables_to_update.each do |table_name, table_to_update|
+		if table_to_update.capacity.desiredReadUnits == nil
+			table_to_update.capacity.desiredReadUnits = table_to_update.capacity.currentReadUnits
+		else
+			myPuts " change #{table_name} readUnits #{table_to_update.capacity.currentReadUnits} to #{table_to_update.capacity.desiredReadUnits}"
+		end
+		if table_to_update.capacity.desiredWriteUnits == nil
+			table_to_update.capacity.desiredWriteUnits = table_to_update.capacity.currentWriteUnits
+		else
+			myPuts " change #{table_name} writeUnits #{table_to_update.capacity.currentWriteUnits} to #{table_to_update.capacity.desiredWriteUnits}"
+		end
+		table_to_update.globalIndexes.each do | index |
+			if index.capacity.desiredReadUnits == nil
+				index.capacity.desiredReadUnits = index.capacity.currentReadUnits
+			else
+				myPuts " change #{table_name} globalSecIndex #{index.name} readUnits #{index.capacity.currentReadUnits} to #{index.capacity.desiredReadUnits}"
+			end
+			if index.capacity.desiredWriteUnits == nil
+				index.capacity.desiredWriteUnits = index.capacity.currentWriteUnits
+			else
+				myPuts " change #{table_name} globalSecIndex #{index.name} writeUnits #{index.capacity.currentWriteUnits} to #{index.capacity.desiredWriteUnits}"
+			end
+		end
 	end
-	if table_to_update.capacity.desiredWriteUnits == nil
-		table_to_update.capacity.desiredWriteUnits = table_to_update.capacity.currentWriteUnits
-	else
-		myPuts " change #{table_name} writeUnits #{table_to_update.capacity.currentWriteUnits} to #{table_to_update.capacity.desiredWriteUnits}"
+
+	if @test_mode == true
+		myPuts " Test mode enabled - will not modify any tables.",true
+		exit
 	end
-	table_to_update.globalIndexes.each do | index |
-	    if index.capacity.desiredReadUnits == nil
-		    index.capacity.desiredReadUnits = index.capacity.currentReadUnits
-	    else
-		    myPuts " change #{table_name} globalSecIndex #{index.name} readUnits #{index.capacity.currentReadUnits} to #{index.capacity.desiredReadUnits}"
-	    end
-	    if index.capacity.desiredWriteUnits == nil
-		    index.capacity.desiredWriteUnits = index.capacity.currentWriteUnits
-	    else
-		    myPuts " change #{table_name} globalSecIndex #{index.name} writeUnits #{index.capacity.currentWriteUnits} to #{index.capacity.desiredWriteUnits}"
-	    end
-	end
-end
 
+	#########
+	### set the tables that need to be changed
+	#########
+	while @dynamodb_tables_to_update.length > 0
 
-
-if @test_mode == true
-    myPuts " exiting due to test mode",true
-    exit
-end
-
-
-
-#########
-### set the tables that need to be changed
-#########
-while @dynamodb_tables_to_update.length > 0
-
-        @dynamodb_tables_to_update.each do |table_name, table_to_update|
-                if table_to_update.state == STATE_ERROR || table_to_update.state == STATE_UNKNOWN
-                        myPuts "Error table #{table_name} state in error: #{table_to_update.state}",true
-                        @dynamodb_tables_to_update.delete(table_name)
-                end
-
-		state, status  = getCurrentUnits(@dynamoApiClient, table_name, table_to_update)
-                if state == STATE_ERROR
-                        myPuts "Error table #{table_name} get units failed state: #{state}",true
-                        @dynamodb_tables_to_update.delete(table_name)
-                end
-                case status
-                        when DYNAMODB_STATUS_CREATING
-                                myPuts "table #{table_name} aws_status CREATING, waiting for table to be status of active"
-                        when DYNAMODB_STATUS_UPDATING
-                                myPuts "table #{table_name} aws_status UPDATING readUnits #{table_to_update.capacity.nextReadUnits} writeUnits #{table_to_update.capacity.nextWriteUnits}, waiting..."
-                        when DYNAMODB_STATUS_ACTIVE
-				global_index_status_active = true
-			        table_to_update.globalIndexes.each do | index |
-				    if index.index_status != DYNAMODB_STATUS_ACTIVE
-					global_index_status_active = false
-					myPuts "table #{table_name} globalIndex #{index.name} status #{index.index_status}, waiting..."
-					break
-				    end
-				end
-				if global_index_status_active == false
-				    next
-				end
-
-                                #if  compareCurrentGtEqDesiredUnits(table_to_update)
-                                if  compareCurrentToDesiredUnits(table_to_update)
-					update_description = ""
-					if  table_to_update.capacity.originalReadUnits != table_to_update.capacity.currentReadUnits 
-						update_description = "read #{table_to_update.capacity.originalReadUnits}->#{table_to_update.capacity.currentReadUnits}" 
+			@dynamodb_tables_to_update.each do |table_name, table_to_update|
+					if table_to_update.state == STATE_ERROR || table_to_update.state == STATE_UNKNOWN
+							myPuts "Error table #{table_name} state in error: #{table_to_update.state}",true
+							@dynamodb_tables_to_update.delete(table_name)
 					end
-					if  table_to_update.capacity.originalWriteUnits != table_to_update.capacity.currentWriteUnits 
-						update_description = update_description + " write #{table_to_update.capacity.originalWriteUnits}->#{table_to_update.capacity.currentWriteUnits}" 
-					end
-					table_to_update.globalIndexes.each do | index |
-					    global_description = ""
-					    if  index.capacity.originalReadUnits != index.capacity.currentReadUnits 
-						    global_description = " read #{index.capacity.originalReadUnits}->#{index.capacity.currentReadUnits}" 
-					    end
-					    if  index.capacity.originalWriteUnits != index.capacity.currentWriteUnits 
-						    global_description = global_description + "  write #{index.capacity.originalWriteUnits}->#{index.capacity.currentWriteUnits}" 
-					    end
-					    if global_description != ""
-						update_description = update_description + " globalSecIndex #{index.name}->{" + global_description + "} "
-					    end 
-					end
-                                        myPuts "Table #{table_name} Updated"
-					@service_table_list = @service_table_list + " #{table_name}(OK #{update_description}),"
-                                        @dynamodb_tables_to_update.delete(table_name)
-                                        next
-                                end
-                                myPuts "table #{table_name} aws_status = active; checking to see if need to update table" if @verbose == true
-                                updateUnits( @dynamoApiClient, table_name, table_to_update)
-                                if table_to_update.state == STATE_ERROR
-                                        myPuts "Error update table #{table_name} failed",true
-					@service_table_list = @service_table_list + " #{table_name}(FAILED),"
-                                        @dynamodb_tables_to_update.delete(table_name)
-                                        next
-                                end
-                        else
-                                myPuts "Error: unknown status #{status}",true
-                                @dynamodb_tables_to_update.delete(table_name)
-	
-                                next
-                end
-        end
-        if  @dynamodb_tables_to_update.length > 0
-                sleep 5
-        end
-end
 
-@delta_measurement = Time.now() - @st_measurement
-@service_perfdata =  "sampleDate = " + Time.now.to_s + "; execution time= " +"%10.5f" % @delta_measurement.to_f + "; #{@service_table_list}"
+			state, status  = getCurrentUnits(@dynamoApiClient, table_name, table_to_update)
+					if state == STATE_ERROR
+							myPuts "Error table #{table_name} get units failed state: #{state}",true
+							@dynamodb_tables_to_update.delete(table_name)
+					end
+					case status
+							when DYNAMODB_STATUS_CREATING
+									myPuts "table #{table_name} aws_status CREATING, waiting for table to be status of active"
+							when DYNAMODB_STATUS_UPDATING
+									myPuts "table #{table_name} aws_status UPDATING readUnits #{table_to_update.capacity.nextReadUnits} writeUnits #{table_to_update.capacity.nextWriteUnits}, waiting..."
+							when DYNAMODB_STATUS_ACTIVE
+					global_index_status_active = true
+						table_to_update.globalIndexes.each do | index |
+						if index.index_status != DYNAMODB_STATUS_ACTIVE
+						global_index_status_active = false
+						myPuts "table #{table_name} globalIndex #{index.name} status #{index.index_status}, waiting..."
+						break
+						end
+					end
+					if global_index_status_active == false
+						next
+					end
 
-myPuts "#{@service_output}#{@service_table_list}|#{@service_perfdata}",true
+									#if  compareCurrentGtEqDesiredUnits(table_to_update)
+									if  compareCurrentToDesiredUnits(table_to_update)
+						update_description = ""
+						if  table_to_update.capacity.originalReadUnits != table_to_update.capacity.currentReadUnits 
+							update_description = "read #{table_to_update.capacity.originalReadUnits}->#{table_to_update.capacity.currentReadUnits}" 
+						end
+						if  table_to_update.capacity.originalWriteUnits != table_to_update.capacity.currentWriteUnits 
+							update_description = update_description + " write #{table_to_update.capacity.originalWriteUnits}->#{table_to_update.capacity.currentWriteUnits}" 
+						end
+						table_to_update.globalIndexes.each do | index |
+							global_description = ""
+							if  index.capacity.originalReadUnits != index.capacity.currentReadUnits 
+								global_description = " read #{index.capacity.originalReadUnits}->#{index.capacity.currentReadUnits}" 
+							end
+							if  index.capacity.originalWriteUnits != index.capacity.currentWriteUnits 
+								global_description = global_description + "  write #{index.capacity.originalWriteUnits}->#{index.capacity.currentWriteUnits}" 
+							end
+							if global_description != ""
+							update_description = update_description + " globalSecIndex #{index.name}->{" + global_description + "} "
+							end 
+						end
+											myPuts "Table #{table_name} Updated"
+						@service_table_list = @service_table_list + " #{table_name}(OK #{update_description}),"
+											@dynamodb_tables_to_update.delete(table_name)
+											next
+									end
+									myPuts "table #{table_name} aws_status = active; checking to see if need to update table" if @verbose == true
+									updateUnits( @dynamoApiClient, table_name, table_to_update)
+									if table_to_update.state == STATE_ERROR
+											myPuts "Error update table #{table_name} failed",true
+						@service_table_list = @service_table_list + " #{table_name}(FAILED),"
+											@dynamodb_tables_to_update.delete(table_name)
+											next
+									end
+							else
+									myPuts "Error: unknown status #{status}",true
+									@dynamodb_tables_to_update.delete(table_name)
+		
+									next
+					end
+			end
+			if  @dynamodb_tables_to_update.length > 0
+					sleep 5
+			end
+	end
+
+	@delta_measurement = Time.now() - @st_measurement
+	@service_perfdata =  "sampleDate = " + Time.now.to_s + "; execution time= " +"%10.5f" % @delta_measurement.to_f + "; #{@service_table_list}"
+
+	myPuts "#{@service_output}#{@service_table_list}|#{@service_perfdata}",true
+
+	d = DateTime.now
+	myPuts "Finished evaluating tables at #{d}"
+	e = d + Rational(@frequency,86400)
+	myPuts "Will wake again at #{e}"
+	sleep @frequency
+
+end #infinite while loop
+
 exit @rc
-

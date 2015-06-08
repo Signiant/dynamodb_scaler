@@ -1,4 +1,4 @@
-#--
+#!/usr/local/bin/ruby
 
 %w[ getoptlong pp base64 openssl time yaml net/smtp ].each { |f| require f }
 
@@ -76,8 +76,7 @@ STATE_ERROR = "ERROR"
 @std_out_print = false
 
 # specify the options we accept and initialize and the option parser
-@verbose = false
-@credential_file = '' 
+@verbose = false 
 use_rsa = false
 $my_pid = Process.pid
 
@@ -569,13 +568,12 @@ def getNextIncreaseLevel(current, desired)
 end
 #####################################################
 def display_menu
-    puts "Usage: #{$0} [-v] -c <credentials>"
+    puts "Usage: #{$0} [-v]"
     puts "  --help, -h:                                 This Help"
     puts "  --test, -x:                                 Enable test mode"
     puts "  --verbose, -v:                              Enable verbose mode"
     puts "  --list_regions, -l:                         List the amazon region endpoints"
     puts "  --log_output <id>, -p <id>:                 Log output to with id/timestamp in dir #{@log_dir}"
-    puts "  --credential_file <file>, -f <file>:        Path to a File containing the Amazon Credentials"
 	puts "  --overrides_file <file> , -n <file>:        Json format file to specify cmd line options"
     puts "  --config_file <file> , -c <file>:           yaml configuration file of tables to query "
     puts "  --ignore_file <file> , -i <file>:           yaml configuration file of tables to ignore "
@@ -613,7 +611,6 @@ end
 #####################################################
 opts = GetoptLong.new
 
-
 # add options
 opts.set_options(
         [ "--help", "-h", GetoptLong::NO_ARGUMENT ], \
@@ -626,7 +623,6 @@ opts.set_options(
 		[ "--config_file", "-c", GetoptLong::REQUIRED_ARGUMENT ], \
 		[ "--ignore_file", "-i", GetoptLong::REQUIRED_ARGUMENT ], \
 		[ "--output_file", "-o", GetoptLong::REQUIRED_ARGUMENT ], \
-        [ "--credential_file", "-f", GetoptLong::REQUIRED_ARGUMENT ], \
 		[ "--frequency", "-q", GetoptLong::REQUIRED_ARGUMENT ], \
         [ "--region", "-r", GetoptLong::REQUIRED_ARGUMENT ]
       )
@@ -643,9 +639,10 @@ begin
 		  overrides_hash = JSON.parse(jsonFile)
 		  @verbose = overrides_hash['verbose']
 		  @frequency = overrides_hash['frequency']
-		  @credential_file = overrides_hash['credentialFile']
 		  @config_file = overrides_hash['configFile']
 		  @ignore_file = overrides_hash['ignoreFile']
+		  @secret_access_key = overrides_hash['secret_access_key']
+		  @access_key_id = overrides_hash['access_key_id']
 		  if validate_region( overrides_hash['region'],@dynamo_regions)
 		      @dynamo_db_endpoint = overrides_hash['region']
 		  else
@@ -666,8 +663,6 @@ begin
 		  @log_file_name = "dynamo_cloudwatch_#{@log_output_id}_" + @start_time.strftime("%Y-%m-%d") + ".log"
         when '--list_regions'
           display_regions
-	    when '--credential_file'
-	      @credential_file = arg
 	    when '--config_file'
           @config_file = arg
 	    when '--ignore_file'
@@ -729,35 +724,6 @@ if @ignore_file != nil
 	end
 end
 
-
-begin
-  content = File.read(@credential_file)
-  key_file = "./cloutomate.pem" #TODO: make configurable?
-  encrypted_access_key_id = content.match(/^\sec2_access_id.*ec2_access_key/m).to_s.gsub("ec2_access_id","").gsub("ec2_access_key","").strip
-  encrypted_secret_access_key = content.match(/^\sec2_access_key.*/m).to_s.gsub("ec2_access_key","").strip
-  if use_rsa
-    decrypt_key = OpenSSL::PKey::RSA.new(File.read(key_file))
-  
-    access_key_id = decrypt_key.private_decrypt(Base64.decode64(encrypted_access_key_id))
-    secret_access_key = decrypt_key.private_decrypt(Base64.decode64(encrypted_secret_access_key))
-  else
-    cipher = OpenSSL::Cipher::Cipher.new('bf-cbc')
-
-    cipher.decrypt
-    cipher.key = Digest::SHA256.digest(File.read(key_file))
-    access_key_id = cipher.update(Base64.decode64(encrypted_access_key_id))
-    access_key_id << cipher.final
-
-    cipher.decrypt
-    cipher.key = Digest::SHA256.digest(File.read(key_file))
-    secret_access_key = cipher.update(Base64.decode64(encrypted_secret_access_key))
-    secret_access_key << cipher.final
-  end
-rescue Exception => e
-  myPuts "Error occured while retrieving and decrypting credentials: #{e}",true
-  exit CODE_CRITICAL
-end
-
 # DJN loop here
 while true do
 
@@ -766,23 +732,45 @@ while true do
 	myPuts "Process starts at #{d}"
 	myPuts "connecting to AWS dynamoDB region #{@dynamo_db_endpoint}"
 	
+	useKeys = false
+	if @access_key_id != nil && @access_key_id.length > 0
+	  useKeys = true
+	end
+	
 	begin
-	  AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
-					:access_key_id => access_key_id, 
-					:secret_access_key => secret_access_key,
+	 myPuts "ak: #{@access_key_id}"
+	  if useKeys
+	    # use aws credentials in the overrides file
+		myPuts "Using AWS credentials in overrides file to connect to DynamoDB"
+	    AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
+					:access_key_id => @access_key_id, 
+					:secret_access_key => @secret_access_key,
 					:dynamo_db_endpoint => @dynamo_db_endpoint)
+	  else
+	    # use role based credentials
+		myPuts "Using AWS role credentials to connect to DynamoDB"
+	    AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
+					:dynamo_db_endpoint => @dynamo_db_endpoint)
+	  end
+	  
 	  @dynamoApiClient = AWS::DynamoDB::Client.new
 
 	rescue Exception => e
-	  myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
+	  myPuts "Error occured while trying to connect to DynamoDB endpoint: #{e}",true
 	  exit CODE_CRITICAL
 	end
 
 	@cwApi = nil
 	begin
-	  @cwApi = AWS::CloudWatch.new( :access_key_id => access_key_id, :secret_access_key => secret_access_key)
+	  if useKeys
+	    myPuts "Using AWS credentials in overrides file to connect to CloudWatch"
+	    @cwApi = AWS::CloudWatch.new( :access_key_id => @access_key_id, :secret_access_key => @secret_access_key)
+	  else
+	    myPuts "Using AWS role credentials to connect to CloudWatch"
+	    @cwApi = AWS::CloudWatch.new
+	  end
 	rescue Exception => e
-	  myPuts "Error occured while trying to connect to DynamoDB server: \n" + e,true
+	  myPuts "Error occured while trying to connect to Cloudwatch endpoint: #{e}",true
 	  exit CODE_CRITICAL
 	end
 

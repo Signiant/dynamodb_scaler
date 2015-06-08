@@ -1,8 +1,9 @@
 {
-	"frequency": 300, 
-	"credentialFile": "/vagrant/externals-nagios/devops_monitoring_credentials.cfg",
+	"frequency": 300,
 	"configFile": "/dynamodb_table_defs/all_tables.yaml",
 	"ignoreFile": "/tmp/capcacitymanagerexclusions.yaml",
 	"region": "dynamodb.us-east-1.amazonaws.com",
-	"verbose": true
+	"verbose": true,
+	"access_key_id": "",
+	"secret_access_key": ""
 }

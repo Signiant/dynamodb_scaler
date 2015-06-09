@@ -707,7 +707,7 @@ end
 
 if ENV['FREQUENCY']
 	myPuts "Polling frequency specified in environment - #{ENV['FREQUENCY']}",true
-	@frequency = ENV['FREQUENCY']
+	@frequency = Integer(ENV['FREQUENCY'])
 end
 
 if @cmdline_table == nil && @config_file == nil

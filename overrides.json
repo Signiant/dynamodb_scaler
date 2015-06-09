@@ -3,7 +3,7 @@
 	"configFile": "/dynamodb_table_defs/all_tables.yaml",
 	"ignoreFile": "/tmp/capcacitymanagerexclusions.yaml",
 	"region": "dynamodb.us-east-1.amazonaws.com",
-	"verbose": true,
+	"verbose": false,
 	"access_key_id": "",
 	"secret_access_key": ""
 }

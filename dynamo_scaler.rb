@@ -8,6 +8,9 @@ require 'bundler/setup'
 require 'aws-sdk-v1'
 require 'json'
 
+# Turn off buffering
+STDOUT.sync = true
+
 CODE_OK = 0
 CODE_WARNING = 1
 CODE_CRITICAL = 2
@@ -73,7 +76,7 @@ STATE_ERROR = "ERROR"
 @logger = nil
 @log_file_name = "dynamo_scaler.log"
 
-@std_out_print = false
+@std_out_print = true
 
 # specify the options we accept and initialize and the option parser
 @verbose = false 
@@ -686,6 +689,27 @@ rescue => err
         display_menu
 end
 
+# See if there are any environment specific overrides
+if ENV['VERBOSE']
+	myPuts "Verbose specified in environment - enabling verbose logging",true
+	@verbose = true
+end
+
+if ENV['DYNAMODB_REGION']
+	myPuts "DynamoDB region specified in environment - #{ENV['DYNAMODB_REGION']}",true
+	if validate_region( ENV['DYNAMODB_REGION'],@dynamo_regions)
+		@dynamo_db_endpoint = ENV['DYNAMODB_REGION']
+	else
+		puts "Error: Invalid region specified in the environment. Region must be one of..."
+		display_regions
+	end
+end
+
+if ENV['FREQUENCY']
+	myPuts "Polling frequency specified in environment - #{ENV['FREQUENCY']}",true
+	@frequency = ENV['FREQUENCY']
+end
+
 if @cmdline_table == nil && @config_file == nil
 	myPuts "require --table or --config_file to be specified"
 	display_menu
@@ -701,7 +725,7 @@ if @config_file != nil
     while config_read == false do
 	    @return_code,@service_output =  read_config(@config_file)
 	    if @return_code != 0
-		    myPuts "Error reading config - does the config file exist yet? #{@config_file}, msg #{@service_output}"
+		    myPuts "Error reading config - does the config file exist yet? #{@config_file}, msg #{@service_output}",true
 		    #myPuts "#{@service_output}|#{@service_perfdata}",true
 			sleep 10
 		    # exit @return_code
@@ -715,9 +739,9 @@ if @ignore_file != nil
         if  File.exists?(@ignore_file) 
 		@return_code,@service_output =  read_ignore(@ignore_file)
 		if @return_code != 0
-			myPuts "Error reading ignore #{@ignore_file}, msg #{@service_output}"
-			myPuts "#{@service_output}|#{@service_perfdata}",true
-			exit @return_code
+			myPuts "Error reading ignore #{@ignore_file}, msg #{@service_output}",true
+			#myPuts "#{@service_output}|#{@service_perfdata}",true
+			# exit @return_code
 		end
 	else
 		myPuts "ignore file does not exist",false
@@ -726,11 +750,11 @@ end
 
 # DJN loop here
 while true do
-
+	
 	# connect to Amazon
 	d = DateTime.now
-	myPuts "Process starts at #{d}"
-	myPuts "connecting to AWS dynamoDB region #{@dynamo_db_endpoint}"
+	myPuts "Process starts at #{d}",true
+	myPuts "connecting to AWS dynamoDB region #{@dynamo_db_endpoint}",true
 	
 	useKeys = false
 	if @access_key_id != nil && @access_key_id.length > 0
@@ -738,17 +762,16 @@ while true do
 	end
 	
 	begin
-	 myPuts "ak: #{@access_key_id}"
 	  if useKeys
 	    # use aws credentials in the overrides file
-		myPuts "Using AWS credentials in overrides file to connect to DynamoDB"
+		myPuts "Using AWS credentials in overrides file to connect to DynamoDB",true
 	    AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
 					:access_key_id => @access_key_id, 
 					:secret_access_key => @secret_access_key,
 					:dynamo_db_endpoint => @dynamo_db_endpoint)
 	  else
 	    # use role based credentials
-		myPuts "Using AWS role credentials to connect to DynamoDB"
+		myPuts "Using AWS role credentials to connect to DynamoDB",true
 	    AWS.config(:dynamo_db => {:api_version => '2012-08-10'},
 					:dynamo_db_endpoint => @dynamo_db_endpoint)
 	  end
@@ -763,25 +786,16 @@ while true do
 	@cwApi = nil
 	begin
 	  if useKeys
-	    myPuts "Using AWS credentials in overrides file to connect to CloudWatch"
+	    myPuts "Using AWS credentials in overrides file to connect to CloudWatch",true
 	    @cwApi = AWS::CloudWatch.new( :access_key_id => @access_key_id, :secret_access_key => @secret_access_key)
 	  else
-	    myPuts "Using AWS role credentials to connect to CloudWatch"
+	    myPuts "Using AWS role credentials to connect to CloudWatch",true
 	    @cwApi = AWS::CloudWatch.new
 	  end
 	rescue Exception => e
 	  myPuts "Error occured while trying to connect to Cloudwatch endpoint: #{e}",true
 	  exit CODE_CRITICAL
 	end
-
-	#if @verbose == true
-	#	metrics = @cwApi.client.list_metrics( options = {
-	#		:namespace => DYNAMODB_NAMESPACE,
-	#		:dimensions => [ :name=>"TableName", :value=>"#{tableName}"] 
-	#	} )
-	#	pp metrics
-	#end
-
 
 	#########
 	### load up the tables that need to be changed
@@ -808,6 +822,7 @@ while true do
 				table.state = STATE_OK
 				state, aws_status  = getCurrentUnits(@dynamoApiClient, table_name, table)
 				table.state = state
+				myPuts "Checking table: #{table_name}",@std_out_print
 				if state == STATE_OK
 					table.aws_status = aws_status
 					table.capacity.originalReadUnits = table.capacity.currentReadUnits
@@ -837,7 +852,7 @@ while true do
 			end
 		end
 		if tables.include?(:last_evaluated_table_name)
-			myPuts "-----------------------------------" if @verbose == true
+			myPuts "-----------------------------------",@std_out_print
 			@exclusive_start_table_name = tables[:last_evaluated_table_name]
 		else
 			@is_truncated = false
@@ -850,11 +865,11 @@ while true do
 	@dynamodb_tables.each do |table_name, table|
 		myPuts "#{table_name} #{table.aws_status}",@std_out_print
 		if table.state == STATE_OK
-			myPuts "     readUnit #{table.capacity.currentCloudWatchReadUnits} of #{table.capacity.currentReadUnits}",@std_out_print
-			myPuts "     writeUnit #{table.capacity.currentCloudWatchWriteUnits} of #{table.capacity.currentWriteUnits}",@std_out_print
+			myPuts "     readUnits consumed #{table.capacity.currentCloudWatchReadUnits} of #{table.capacity.currentReadUnits}",@std_out_print
+			myPuts "     writeUnits consumed #{table.capacity.currentCloudWatchWriteUnits} of #{table.capacity.currentWriteUnits}",@std_out_print
 			table.globalIndexes.each do | index |
-				myPuts "     globalSecIndex #{index.name} readUnit #{index.capacity.currentCloudWatchReadUnits} of #{index.capacity.currentReadUnits}",@std_out_print
-				myPuts "     globalSecIndex #{index.name} writeUnit #{index.capacity.currentCloudWatchWriteUnits} of #{index.capacity.currentWriteUnits}",@std_out_print
+				myPuts "     globalSecIndex #{index.name} readUnits consumed #{index.capacity.currentCloudWatchReadUnits} of #{index.capacity.currentReadUnits}",@std_out_print
+				myPuts "     globalSecIndex #{index.name} writeUnits consumed #{index.capacity.currentCloudWatchWriteUnits} of #{index.capacity.currentWriteUnits}",@std_out_print
 			end
 			if @verbose == true
 				myPuts "     Scan: throttled #{table.throttledRequestsScan} systemErrors #{table.systemErrorsScan}",@std_out_print
@@ -903,10 +918,10 @@ while true do
 					end
 				end
 			else
-				myPuts "     Warning: Table is not active so will not evaluate for increase"
+				myPuts "     Warning: Table is not active so will not evaluate for increase",@std_out_print
 			end
 		else
-			myPuts "     Warning: Table not found in dynamodb"
+			myPuts "     Warning: Table not found in dynamodb",@std_out_print
 		end
 	end
 
@@ -974,7 +989,7 @@ while true do
 					end
 					case status
 							when DYNAMODB_STATUS_CREATING
-									myPuts "table #{table_name} aws_status CREATING, waiting for table to be status of active"
+									myPuts "table #{table_name} aws_status CREATING, waiting for table to be status of active",@std_out_print
 							when DYNAMODB_STATUS_UPDATING
 									myPuts "table #{table_name} aws_status UPDATING readUnits #{table_to_update.capacity.nextReadUnits} writeUnits #{table_to_update.capacity.nextWriteUnits}, waiting..."
 							when DYNAMODB_STATUS_ACTIVE
@@ -1011,7 +1026,7 @@ while true do
 							update_description = update_description + " globalSecIndex #{index.name}->{" + global_description + "} "
 							end 
 						end
-											myPuts "Table #{table_name} Updated"
+											myPuts "Table #{table_name} Updated",@std_out_print
 						@service_table_list = @service_table_list + " #{table_name}(OK #{update_description}),"
 											@dynamodb_tables_to_update.delete(table_name)
 											next
@@ -1039,12 +1054,13 @@ while true do
 	@delta_measurement = Time.now() - @st_measurement
 	@service_perfdata =  "sampleDate = " + Time.now.to_s + "; execution time= " +"%10.5f" % @delta_measurement.to_f + "; #{@service_table_list}"
 
-	myPuts "#{@service_output}#{@service_table_list}|#{@service_perfdata}",true
+	#myPuts "#{@service_output}#{@service_table_list}|#{@service_perfdata}",true
+	myPuts "#{@service_output}#{@service_table_list}",true
 
 	d = DateTime.now
-	myPuts "Finished evaluating tables at #{d}"
+	myPuts "Finished evaluating tables at #{d}",true
 	e = d + Rational(@frequency,86400)
-	myPuts "Will wake again at #{e}"
+	myPuts "Will wake again at #{e}",true
 	sleep @frequency
 
 end #infinite while loop

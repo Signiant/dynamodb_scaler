@@ -718,38 +718,37 @@ if @cmdline_table != nil
 	@dynamodb_tables[@cmdline_table]  = Dynamodb_table.new(@cmdline_table)
 end
 
-@st_measurement = Time.now()
-
-if @config_file != nil
-    config_read = false
-    while config_read == false do
-	    @return_code,@service_output =  read_config(@config_file)
-	    if @return_code != 0
-		    myPuts "Error reading config - does the config file exist yet? #{@config_file}, msg #{@service_output}",true
-		    #myPuts "#{@service_output}|#{@service_perfdata}",true
-			sleep 10
-		    # exit @return_code
-		else
-		    config_read = true
-	    end
-	end 
-end
-
-if @ignore_file != nil
-        if  File.exists?(@ignore_file) 
-		@return_code,@service_output =  read_ignore(@ignore_file)
-		if @return_code != 0
-			myPuts "Error reading ignore #{@ignore_file}, msg #{@service_output}",true
-			#myPuts "#{@service_output}|#{@service_perfdata}",true
-			# exit @return_code
-		end
-	else
-		myPuts "ignore file does not exist",false
-	end
-end
-
 # DJN loop here
 while true do
+	@st_measurement = Time.now()
+
+	if @config_file != nil
+		config_read = false
+		while config_read == false do
+			@return_code,@service_output =  read_config(@config_file)
+			if @return_code != 0
+				myPuts "Error reading config - does the config file exist yet? #{@config_file}, msg #{@service_output}",true
+				#myPuts "#{@service_output}|#{@service_perfdata}",true
+				sleep 10
+				# exit @return_code
+			else
+				config_read = true
+			end
+		end 
+	end
+
+	if @ignore_file != nil
+			if  File.exists?(@ignore_file) 
+			@return_code,@service_output =  read_ignore(@ignore_file)
+			if @return_code != 0
+				myPuts "Error reading ignore #{@ignore_file}, msg #{@service_output}",true
+				#myPuts "#{@service_output}|#{@service_perfdata}",true
+				# exit @return_code
+			end
+		else
+			myPuts "ignore file does not exist",false
+		end
+	end
 	
 	# connect to Amazon
 	d = DateTime.now

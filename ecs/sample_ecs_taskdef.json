@@ -1,0 +1,67 @@
+{
+  "family": "dynamodb-scaler",
+  "containerDefinitions": [
+    {
+      "name": "dynamodb-scaler",
+      "image": "signiant/dynamodb-scaler:latest",
+      "cpu": 10,
+      "memory": 200,
+      "entryPoint": [],
+      "environment": [
+        {
+          "name": "DYNAMODB_REGION",
+          "value": "dynamodb.us-east-1.amazonaws.com"
+        },
+        {
+          "name": "FREQUENCY",
+          "value": "300"
+        }
+      ],
+      "command": [],
+      "portMappings": [],
+      "volumesFrom": [
+        {
+          "sourceContainer": "dynamodb-table-lister",
+          "readOnly": null
+        }
+      ],
+      "links": [
+        "dynamodb-table-lister"
+      ],
+      "mountPoints": [],
+      "essential": true
+    },
+    {
+      "name": "dynamodb-table-lister",
+      "image": "signiant/dynamodb-table-lister:latest",
+      "cpu": 10,
+      "memory": 200,
+      "entryPoint": [],
+      "environment": [
+        {
+          "name": "WRITEPERCENT",
+          "value": "50"
+        },
+        {
+          "name": "DYNAMODB_REGION",
+          "value": "dynamodb.us-east-1.amazonaws.com"
+        },
+        {
+          "name": "FREQUENCY",
+          "value": "86400"
+        },
+        {
+          "name": "READPERCENT",
+          "value": "50"
+        }
+      ],
+      "command": [],
+      "portMappings": [],
+      "volumesFrom": [],
+      "links": [],
+      "mountPoints": [],
+      "essential": true
+    }
+  ],
+  "volumes": []
+}

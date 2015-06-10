@@ -29,11 +29,6 @@ STATE_OK = "OK"
 STATE_UNKNOWN = "UNKNOWN"
 STATE_ERROR = "ERROR"
 
-@service_output = "OK"
-@service_perfdata = ""
-@service_table_list = ""
-@rc = CODE_OK
-
 @log_dir =  '/var/log'
 
 @dynamo_db_endpoint = 'dynamodb.us-east-1.amazonaws.com'
@@ -54,16 +49,10 @@ STATE_ERROR = "ERROR"
 @threshold_over = 0.5
 #@default_threshold_increase = 1.5
 
-
 @test_mode = false
-
-@start_time = Time.now()
 
 @cwApi = nil
 @dynamoApiClient = nil
-
-@dynamodb_tables = {}
-@dynamodb_tables_to_update = {}
 
 @config_file = nil
 @ignore_file = nil
@@ -77,11 +66,17 @@ STATE_ERROR = "ERROR"
 @log_file_name = "dynamo_scaler.log"
 
 @std_out_print = true
-
-# specify the options we accept and initialize and the option parser
 @verbose = false 
-use_rsa = false
+
 $my_pid = Process.pid
+
+@dynamodb_tables = {}
+@dynamodb_tables_to_update = {}
+@service_table_list = ""
+@service_output = "OK"
+@service_perfdata = ""
+@service_table_list = ""
+@rc = CODE_OK
 
 #####################################################
 class Provision_capacity
@@ -720,7 +715,15 @@ end
 
 # DJN loop here
 while true do
+	@start_time = Time.now()
 	@st_measurement = Time.now()
+	@dynamodb_tables.clear
+	@dynamodb_tables_to_update.clear
+	@service_table_list = ""
+	@service_output = "OK"
+	@service_perfdata = ""
+	@service_table_list = ""
+	@rc = CODE_OK
 
 	if @config_file != nil
 		config_read = false

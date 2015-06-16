@@ -15,6 +15,8 @@ credentials are used.  NOTE that values specified in variables OVERRIDE those sp
 
 - DYNAMODB_REGION : The dynamoDB endpoint to connect to for monitoring tables
 - FREQUENCY: How often to check the table throughput (in seconds).  Default 300
+- VERBOSE: Enable more logging information
+- TEST_MODE: Set to true to evaluate tables but not change any
 
 ## Example Docker run
 
@@ -23,8 +25,9 @@ credentials are used.  NOTE that values specified in variables OVERRIDE those sp
 
 docker run -d -e "DYNAMODB_REGION=dynamodb.us-east-1.amazonaws.com" \
               -e "FREQUENCY=86400" \
-			  --name dynamo-scaler \
-			  --volumes-from dynamo-table-lister \
+              -e "TEST_MODE=true" \
+	      --name dynamo-scaler \
+	      --volumes-from dynamo-table-lister \
               signiant/dynamodb-scaler
 ````
 ## Running under the EC2 Container Service (ECS)

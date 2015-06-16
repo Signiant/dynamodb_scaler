@@ -636,6 +636,7 @@ begin
 		  jsonFile = File.read(arg)
 		  overrides_hash = JSON.parse(jsonFile)
 		  @verbose = overrides_hash['verbose']
+		  @test_mode = overrides_hash['testMode']
 		  @frequency = overrides_hash['frequency']
 		  @config_file = overrides_hash['configFile']
 		  @ignore_file = overrides_hash['ignoreFile']
@@ -688,6 +689,11 @@ end
 if ENV['VERBOSE']
 	myPuts "Verbose specified in environment - enabling verbose logging",true
 	@verbose = true
+end
+
+if ENV['TEST_MODE']
+	myPuts "Test mode specified in environment - no tables will be modified",true
+	@test_mode = true
 end
 
 if ENV['DYNAMODB_REGION']
@@ -932,7 +938,11 @@ while true do
 	####
 	if @dynamodb_tables_to_update.length > 0
 		@service_perfdata = "Tables: "
-		@service_output = "Tables updated: "
+		if @test_mode == true
+			@service_output = "TEST MODE: Tables that should be updated: "
+		else
+			@service_output = "Tables updated: "
+		end
 		@rc = CODE_WARNING
 	else
 		@service_perfdata = ""
@@ -970,13 +980,12 @@ while true do
 
 	if @test_mode == true
 		myPuts " Test mode enabled - will not modify any tables.",true
-		exit
 	end
 
 	#########
 	### set the tables that need to be changed
 	#########
-	while @dynamodb_tables_to_update.length > 0
+	while @dynamodb_tables_to_update.length > 0 && @test_mode == false
 
 			@dynamodb_tables_to_update.each do |table_name, table_to_update|
 					if table_to_update.state == STATE_ERROR || table_to_update.state == STATE_UNKNOWN

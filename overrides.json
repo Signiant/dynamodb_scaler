@@ -1,9 +1,10 @@
 {
 	"frequency": 300,
-	"configFile": "/dynamodb_table_defs/all_tables.yaml",
+	"configFile": "/dynamodb_table_defs/AC.yaml",
 	"ignoreFile": "/tmp/capcacitymanagerexclusions.yaml",
 	"region": "dynamodb.us-east-1.amazonaws.com",
 	"verbose": false,
+	"testMode": false,
 	"access_key_id": "",
 	"secret_access_key": ""
 }

@@ -19,3 +19,6 @@ DEPENDENCIES
   aws-sdk-v1
   fileutils
   json
+
+BUNDLED WITH
+   1.10.1

@@ -985,81 +985,91 @@ while true do
 	#########
 	### set the tables that need to be changed
 	#########
-	while @dynamodb_tables_to_update.length > 0 && @test_mode == false
-
-			@dynamodb_tables_to_update.each do |table_name, table_to_update|
-					if table_to_update.state == STATE_ERROR || table_to_update.state == STATE_UNKNOWN
-							myPuts "Error table #{table_name} state in error: #{table_to_update.state}",true
-							@dynamodb_tables_to_update.delete(table_name)
-					end
+	while @dynamodb_tables_to_update.length > 0
+		@dynamodb_tables_to_update.each do |table_name, table_to_update|
+			if table_to_update.state == STATE_ERROR || table_to_update.state == STATE_UNKNOWN
+				myPuts "Error table #{table_name} state in error: #{table_to_update.state}",true
+				@dynamodb_tables_to_update.delete(table_name)
+			end
 
 			state, status  = getCurrentUnits(@dynamoApiClient, table_name, table_to_update)
-					if state == STATE_ERROR
-							myPuts "Error table #{table_name} get units failed state: #{state}",true
-							@dynamodb_tables_to_update.delete(table_name)
-					end
-					case status
-							when DYNAMODB_STATUS_CREATING
-									myPuts "table #{table_name} aws_status CREATING, waiting for table to be status of active",@std_out_print
-							when DYNAMODB_STATUS_UPDATING
-									myPuts "table #{table_name} aws_status UPDATING readUnits #{table_to_update.capacity.nextReadUnits} writeUnits #{table_to_update.capacity.nextWriteUnits}, waiting..."
-							when DYNAMODB_STATUS_ACTIVE
+			if state == STATE_ERROR
+				myPuts "Error table #{table_name} get units failed state: #{state}",true
+				@dynamodb_tables_to_update.delete(table_name)
+			end
+
+			case status
+				when DYNAMODB_STATUS_CREATING
+					myPuts "table #{table_name} aws_status CREATING, waiting for table to be status of active",@std_out_print
+				when DYNAMODB_STATUS_UPDATING
+					myPuts "table #{table_name} aws_status UPDATING readUnits #{table_to_update.capacity.nextReadUnits} writeUnits #{table_to_update.capacity.nextWriteUnits}, waiting..."
+				when DYNAMODB_STATUS_ACTIVE
 					global_index_status_active = true
-						table_to_update.globalIndexes.each do | index |
+					table_to_update.globalIndexes.each do | index |
 						if index.index_status != DYNAMODB_STATUS_ACTIVE
-						global_index_status_active = false
-						myPuts "table #{table_name} globalIndex #{index.name} status #{index.index_status}, waiting..."
-						break
+							global_index_status_active = false
+							myPuts "table #{table_name} globalIndex #{index.name} status #{index.index_status}, waiting..."
+							break
 						end
 					end
+			
 					if global_index_status_active == false
 						next
 					end
 
-									#if  compareCurrentGtEqDesiredUnits(table_to_update)
-									if  compareCurrentToDesiredUnits(table_to_update)
+					#if  compareCurrentGtEqDesiredUnits(table_to_update)
+					if compareCurrentToDesiredUnits(table_to_update)
 						update_description = ""
 						if  table_to_update.capacity.originalReadUnits != table_to_update.capacity.currentReadUnits 
 							update_description = "read #{table_to_update.capacity.originalReadUnits}->#{table_to_update.capacity.currentReadUnits}" 
 						end
+
 						if  table_to_update.capacity.originalWriteUnits != table_to_update.capacity.currentWriteUnits 
 							update_description = update_description + " write #{table_to_update.capacity.originalWriteUnits}->#{table_to_update.capacity.currentWriteUnits}" 
 						end
+
 						table_to_update.globalIndexes.each do | index |
 							global_description = ""
 							if  index.capacity.originalReadUnits != index.capacity.currentReadUnits 
 								global_description = " read #{index.capacity.originalReadUnits}->#{index.capacity.currentReadUnits}" 
 							end
+							
 							if  index.capacity.originalWriteUnits != index.capacity.currentWriteUnits 
 								global_description = global_description + "  write #{index.capacity.originalWriteUnits}->#{index.capacity.currentWriteUnits}" 
 							end
+							
 							if global_description != ""
-							update_description = update_description + " globalSecIndex #{index.name}->{" + global_description + "} "
+								update_description = update_description + " globalSecIndex #{index.name}->{" + global_description + "} "
 							end 
 						end
-											myPuts "Table #{table_name} Updated",@std_out_print
+
+						myPuts "Table #{table_name} Updated",@std_out_print
 						@service_table_list = @service_table_list + " #{table_name}(OK #{update_description}),"
-											@dynamodb_tables_to_update.delete(table_name)
-											next
-									end
-									myPuts "table #{table_name} aws_status = active; checking to see if need to update table" if @verbose == true
-									updateUnits( @dynamoApiClient, table_name, table_to_update)
-									if table_to_update.state == STATE_ERROR
-											myPuts "Error update table #{table_name} failed",true
-						@service_table_list = @service_table_list + " #{table_name}(FAILED),"
-											@dynamodb_tables_to_update.delete(table_name)
-											next
-									end
-							else
-									myPuts "Error: unknown status #{status}",true
-									@dynamodb_tables_to_update.delete(table_name)
-		
-									next
+						@dynamodb_tables_to_update.delete(table_name)
+						next
 					end
-			end
-			if  @dynamodb_tables_to_update.length > 0
-					sleep 5
-			end
+					
+					myPuts "table #{table_name} aws_status = active; checking to see if need to update table" if @verbose == true
+					if @test_mode == false
+						updateUnits( @dynamoApiClient, table_name, table_to_update)
+					end
+
+					if table_to_update.state == STATE_ERROR
+						myPuts "Error update table #{table_name} failed",true
+						@service_table_list = @service_table_list + " #{table_name}(FAILED),"
+						@dynamodb_tables_to_update.delete(table_name)
+						next
+					end
+				else
+					myPuts "Error: unknown status #{status}",true
+					@dynamodb_tables_to_update.delete(table_name)
+					next
+				end
+		end
+
+		if  @dynamodb_tables_to_update.length > 0
+			sleep 5
+		end
 	end
 
 	@delta_measurement = Time.now() - @st_measurement
@@ -1067,7 +1077,7 @@ while true do
 
 	#myPuts "#{@service_output}#{@service_table_list}|#{@service_perfdata}",true
 	myPuts "#{@service_output}#{@service_table_list}",true
-
+	
 	d = DateTime.now
 	myPuts "Finished evaluating tables at #{d}",true
 	e = d + Rational(@frequency,86400)

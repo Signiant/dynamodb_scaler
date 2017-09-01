@@ -7,6 +7,7 @@ require 'bundler/setup'
 
 require 'aws-sdk-v1'
 require 'json'
+require 'date'
 
 # Turn off buffering
 STDOUT.sync = true
@@ -266,7 +267,8 @@ def read_ignore(ignore_file)
         end
         if ignore.include?("endtime")
 	    myPuts "ignore endtime #{ignore['endtime']}"
-	    if ignore["endtime"] >= Time.now
+	    parsed_ignore = DateTime.strptime(ignore["endtime"],'%d/%m/%Y %H:%M:%S')
+	    if parsed_ignore >= DateTime.now
 		if ignore.include?("dynamodb")
 		    if ignore["dynamodb"] != nil
 			ignore["dynamodb"].each do |table_name|
